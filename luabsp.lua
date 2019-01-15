@@ -582,7 +582,8 @@ do
             local version = game_lump.version
             local static_props_entry = {}
 
-            assert( version >= 4 and version < 12, "Version not supported: " .. version )
+            if not (version >= 4 and version < 12) then continue end
+
             fl:Seek(game_lump.fileofs)
 
             local dict_entries = fl:ReadLong()

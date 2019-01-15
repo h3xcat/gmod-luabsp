@@ -582,7 +582,7 @@ do
             local version = game_lump.version
             local static_props_entry = {}
 
-            assert( version >= 4 and version < 11, "Version not supported: " .. version )
+            assert( version >= 4 and version < 12, "Version not supported: " .. version )
             fl:Seek(game_lump.fileofs)
 
             local dict_entries = fl:ReadLong()
@@ -612,6 +612,10 @@ do
 
                 static_prop.Origin = Vector( fl:ReadFloat(), fl:ReadFloat(), fl:ReadFloat() )
                 static_prop.Angles = Angle( fl:ReadFloat(), fl:ReadFloat(), fl:ReadFloat() )
+
+                if version >= 11 then
+                    static_prop.Scale = fl:ReadShort()
+                end
 
                 local _1,_2 = read_uchar( fl, 2 )
                 local proptype = _1 + _2 * 256

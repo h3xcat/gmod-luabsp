@@ -422,7 +422,19 @@ do
         [LUMP_DISP_LIGHTMAP_SAMPLE_POSITIONS] = -- Displacement lightmap sample positions
             function(fl, lump_data) end,
         [LUMP_GAME_LUMP] = -- Game-specific data lump
-            function(fl, lump_data) end,
+            function(fl, lump_data)
+                lump_data.data = {}
+                lump_data.size = fl:ReadLong()
+                for i=1,lump_data.size do
+                    lump_data.data[i] = {
+                        id      = fl:Read( 4 ),
+                        flags   = fl:ReadShort(),
+                        version = fl:ReadShort(),
+                        fileofs = fl:ReadLong(),
+                        filelen = fl:ReadLong(),
+                    }
+                end
+            end,
         [LUMP_LEAFWATERDATA] = -- Data for leaf nodes that are inside water
             function(fl, lump_data) end,
         [LUMP_PRIMITIVES] = -- Water polygon data
@@ -498,17 +510,25 @@ do
     LuaBSP = {}
     LuaBSP.__index = LuaBSP
 
-    function LuaBSP.new( mapname )
-        local self = setmetatable({}, LuaBSP)
-
-        local filename = "maps/"..mapname..".bsp"
+    function LuaBSP:GetMapFileHandle( mapname )
+        self.mapname = mapname or self.mapname
+        local filename = "maps/"..self.mapname..".bsp"
         local fl = file.Open( filename, "rb", "GAME")
         if not fl then error( "[LuaBSP] Unable to open: "..filename ) end
 
-        local ident = fl:Read( 4 ) -- BSP file identifier
-        if ident ~= "VBSP" then error( "[LuaBSP] Invalid file header: "..ident) return end
+        return fl
+    end
 
-        self.mapname = mapname
+    function LuaBSP.new( mapname )
+        assert( mapname, "[LuaBSP] Invalid map name" )
+
+        local self = setmetatable({}, LuaBSP)
+        local filename = "maps/"..mapname..".bsp"
+        local fl = self:GetMapFileHandle( mapname )
+
+        local ident = fl:Read( 4 ) -- BSP file identifier
+        if ident ~= "VBSP" then error( "[LuaBSP] Invalid file header: "..ident ) return end
+
         self.version = fl:ReadLong() -- BSP file version
         self.lumps = {} -- lump directory array
 
@@ -517,7 +537,7 @@ do
                 fileofs = fl:ReadLong(), -- offset into file (bytes)
                 filelen = fl:ReadLong(), -- length of lump (bytes)
                 version = fl:ReadLong(), -- lump format version
-                fourCC = fl:Read( 4 ), -- lump ident code
+                fourCC  = fl:Read( 4 ),  -- lump ident code
             }
         end
         self.map_revision = fl:ReadLong() -- the map's revision (iteration, version) number
@@ -536,15 +556,117 @@ do
     end
 
     function LuaBSP:LoadLumps( ... )
-        local filename = "maps/"..self.mapname..".bsp"
-        local fl = file.Open( filename, "rb", "GAME")
-        if not fl then error( "[LuaBSP] Unable to open: "..filename ) end
+        local fl = self:GetMapFileHandle()
 
-        for k, lump in pairs( {...} ) do
+        for k, lump in ipairs( {...} ) do
             local lump_data = self.lumps[lump]
             fl:Seek( lump_data.fileofs )
             lump_parsers[lump]( fl, lump_data )
         end
+
+        fl:Close()
+    end
+
+    function LuaBSP:LoadStaticProps()
+        self:LoadLumps( LUMP_GAME_LUMP )
+
+        local fl   = self:GetMapFileHandle()
+        local lump = self.lumps[LUMP_GAME_LUMP]
+
+        local static_props = {}
+        for _,game_lump in ipairs( lump.data ) do
+            local version = game_lump.version
+            local static_props_entry = {
+                names        = {},
+                leaf         = {},
+                leaf_entries = 0,
+                entries      = {},
+            }
+
+            if not (version >= 4 and version < 12) then continue end
+
+            fl:Seek( game_lump.fileofs )
+
+            local dict_entries = fl:ReadLong()
+            if dict_entries < 0 or dict_entries >= 9999 then continue end
+
+            for i=1,dict_entries do
+                static_props_entry.names[i-1] = fl:Read( 128 ):match( "^[^%z]+" ) or ""
+            end
+
+            local leaf_entries = fl:ReadLong()
+            if leaf_entries < 0 then continue end
+
+            static_props_entry.leaf_entries = leaf_entries
+            for i=1,leaf_entries do
+                static_props_entry.leaf[i] = fl:ReadUShort()
+            end
+
+            local amount = fl:ReadLong()
+            if amount < 0 or amount >= ( 8192 * 2 ) then continue end
+
+            for i=1,amount do
+                local static_prop = {}
+                static_props_entry.entries[i] = static_prop
+
+                static_prop.Origin = Vector( fl:ReadFloat(), fl:ReadFloat(), fl:ReadFloat() )
+                static_prop.Angles = Angle( fl:ReadFloat(), fl:ReadFloat(), fl:ReadFloat() )
+
+                if version >= 11 then
+                    static_prop.Scale = fl:ReadShort()
+                end
+
+                local _1,_2 = string.byte(fl:Read(2),1,2)
+                local proptype = _1 + _2 * 256
+
+                static_prop.PropType = static_props_entry.names[proptype]
+                if not static_prop.PropType then continue end
+
+                static_prop.FirstLeaf = fl:ReadShort()
+                static_prop.LeafCount = fl:ReadShort()
+                static_prop.Solid     = fl:ReadByte()
+                static_prop.Flags     = fl:ReadByte()
+                static_prop.Skin      = fl:ReadLong()
+                if not static_prop.Skin then continue end
+
+                static_prop.FadeMinDist    = fl:ReadFloat()
+                static_prop.FadeMaxDist    = fl:ReadFloat()
+                static_prop.LightingOrigin = Vector( fl:ReadFloat(), fl:ReadFloat(), fl:ReadFloat() )
+
+                if version >= 5 then
+                    static_prop.ForcedFadeScale = fl:ReadFloat()
+                end
+
+                if version == 6 or version == 7 then
+                    static_prop.MinDXLevel = fl:ReadShort()
+                    static_prop.MaxDXLevel = fl:ReadShort()
+                end
+
+                if version >= 8 then
+                    static_prop.MinCPULevel = fl:ReadByte()
+                    static_prop.MaxCPULevel = fl:ReadByte()
+                    static_prop.MinGPULevel = fl:ReadByte()
+                    static_prop.MaxGPULevel = fl:ReadByte()
+                end
+
+                if version >= 7 then
+                    static_prop.DiffuseModulation = Color( string.byte( fl:Read( 4 ), 1, 4 ) )
+                end
+
+                if version >= 10 then
+                    static_prop.unknown = fl:ReadFloat()
+                end
+
+                if version == 9 then
+                    static_prop.DisableX360 = fl:ReadByte() == 1
+                end
+
+            end
+
+            table.insert( static_props, static_props_entry )
+        end
+
+        self.static_props = static_props
 
         fl:Close()
     end
@@ -618,14 +740,14 @@ do
                 color.b = color.b * base_color.z
                 color.a = 255
 
-                local texinfo = self.lumps[LUMP_TEXINFO]["data"][render_data.texinfo] 
+                local texinfo = self.lumps[LUMP_TEXINFO]["data"][render_data.texinfo]
 
 
                 local ref = Vector(0,0,-1)
                 if math.abs( norm:Dot( Vector(0,0,1) ) ) == 1 then
                     ref = Vector(0,1,0)
                 end
-                
+
                 local tv1 = norm:Cross( ref ):Cross( norm ):GetNormalized()
                 local tv2 = norm:Cross( tv1 )
 

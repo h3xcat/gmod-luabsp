@@ -448,7 +448,22 @@ do
         [LUMP_CLIPPORTALVERTS] = -- Clipped portal polygon vertices
             function(fl, lump_data) end,
         [LUMP_CUBEMAPS] = -- env_cubemap location array
-            function(fl, lump_data) end,
+            function(fl, lump_data)
+                lump_data.data = {}
+                lump_data.size = lump_data.filelen / 16
+
+                for i=0, lump_data.size - 1 do
+                    local origin = Vector(fl:ReadLong(), fl:ReadLong(), fl:ReadLong())
+                    local size = fl:ReadLong()
+    
+                    if size < 1 then size = 6 end -- default size should be 32x32
+
+                    lump_data.data[i] = {
+                        origin = origin,
+                        size = 2^(size-1)
+                    }
+                end
+            end,
         [LUMP_TEXDATA_STRING_DATA] = -- Texture name data
             function(fl, lump_data)
                 lump_data.data = {}
